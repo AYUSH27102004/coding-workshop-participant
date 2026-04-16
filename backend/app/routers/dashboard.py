@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from .. import auth, database, models
@@ -11,7 +11,7 @@ def get_summary(
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(auth.get_current_user),
 ):
-    if current_user.role in [models.RoleEnum.admin, models.RoleEnum.hr]:
+    if current_user.role == models.RoleEnum.admin:
         department_rows = (
             db.query(models.Department.name, func.count(models.User.id))
             .outerjoin(models.User, models.User.department_id == models.Department.id)
@@ -38,6 +38,9 @@ def get_summary(
                 for name, rating in avg_by_department
             ],
         }
+
+    if current_user.role == models.RoleEnum.hr:
+        raise HTTPException(status_code=403, detail="HR must use /hr/dashboard")
 
     if current_user.role == models.RoleEnum.manager:
         manager_employee = db.query(models.Employee).filter(models.Employee.user_id == current_user.id).first()

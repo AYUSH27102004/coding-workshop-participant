@@ -1,5 +1,6 @@
-from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from .. import auth, database, models, schemas
 
@@ -11,8 +12,29 @@ def list_users(
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(auth.get_current_user),
 ):
-    if current_user.role in [models.RoleEnum.admin, models.RoleEnum.hr]:
+    if current_user.role == models.RoleEnum.admin:
         return db.query(models.User).all()
+
+    if current_user.role == models.RoleEnum.hr:
+        handled_department_ids = [
+            row[0]
+            for row in (
+                db.query(models.HRDepartment.department_id)
+                .filter(models.HRDepartment.hr_id == current_user.id)
+                .all()
+            )
+        ]
+        if not handled_department_ids:
+            return [current_user]
+
+        return (
+            db.query(models.User)
+            .filter(
+                models.User.department_id.in_(handled_department_ids),
+                models.User.role.in_([models.RoleEnum.employee, models.RoleEnum.manager, models.RoleEnum.hr]),
+            )
+            .all()
+        )
 
     if current_user.role == models.RoleEnum.manager:
         manager_emp = db.query(models.Employee).filter(models.Employee.user_id == current_user.id).first()
@@ -27,20 +49,67 @@ def list_users(
 
 @router.get("/employees", response_model=List[schemas.EmployeeResponse])
 def list_employee_profiles(
+    performance: Optional[str] = Query(default=None),
+    department: Optional[int] = Query(default=None),
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(auth.get_current_user),
 ):
-    if current_user.role in [models.RoleEnum.admin, models.RoleEnum.hr]:
-        return db.query(models.Employee).all()
+    query = (
+        db.query(models.Employee)
+        .join(models.User, models.User.id == models.Employee.user_id)
+        .outerjoin(models.Department, models.Department.id == models.User.department_id)
+    )
 
-    if current_user.role == models.RoleEnum.manager:
-        manager_emp = db.query(models.Employee).filter(models.Employee.user_id == current_user.id).first()
-        if not manager_emp:
+    if current_user.role == models.RoleEnum.admin:
+        pass
+
+    elif current_user.role == models.RoleEnum.hr:
+        handled_department_ids = [
+            row[0]
+            for row in (
+                db.query(models.HRDepartment.department_id)
+                .filter(models.HRDepartment.hr_id == current_user.id)
+                .all()
+            )
+        ]
+        if not handled_department_ids:
             return []
-        return db.query(models.Employee).filter(models.Employee.manager_id == manager_emp.id).all()
+        query = query.filter(models.User.department_id.in_(handled_department_ids))
 
-    current_emp = db.query(models.Employee).filter(models.Employee.user_id == current_user.id).first()
-    return [current_emp] if current_emp else []
+    elif current_user.role == models.RoleEnum.manager:
+        if current_user.department_id is None:
+            return []
+        query = query.filter(models.User.department_id == current_user.department_id)
+
+    else:
+        current_emp = db.query(models.Employee).filter(models.Employee.user_id == current_user.id).first()
+        if not current_emp:
+            return []
+        query = query.filter(models.Employee.id == current_emp.id)
+
+    if department:
+        query = query.filter(models.User.department_id == department)
+
+    if performance:
+        normalized_performance = performance.strip().lower()
+        avg_rating_subquery = (
+            db.query(
+                models.Performance.employee_id.label("employee_id"),
+                func.avg(models.Performance.rating).label("avg_rating"),
+            )
+            .group_by(models.Performance.employee_id)
+            .subquery()
+        )
+        query = query.join(avg_rating_subquery, avg_rating_subquery.c.employee_id == models.Employee.id)
+
+        if normalized_performance == "high":
+            query = query.filter(avg_rating_subquery.c.avg_rating >= 4)
+        elif normalized_performance == "low":
+            query = query.filter(avg_rating_subquery.c.avg_rating < 3)
+        else:
+            raise HTTPException(status_code=400, detail="Invalid employees performance filter")
+
+    return query.all()
 
 
 @router.post("", response_model=schemas.UserResponse, status_code=status.HTTP_201_CREATED)
