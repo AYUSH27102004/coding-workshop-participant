@@ -99,15 +99,20 @@ export default function ManagerDashboardPage() {
     setPlans(res.data);
   };
 
+  const fetchDashboard = async () => {
+    const res = await api.get('/manager/dashboard');
+    setDashboard(res.data);
+  };
+
   const load = async () => {
-    const [userRes, employeeRes, dashboardRes] = await Promise.all([
+    const [userRes, employeeRes] = await Promise.all([
       api.get('/users'),
       api.get('/users/employees'),
-      api.get('/manager/dashboard'),
     ]);
     setUsers(userRes.data);
     setEmployees(employeeRes.data);
-    setDashboard(dashboardRes.data);
+
+    await fetchDashboard();
 
     await Promise.all([
       fetchProjects(''),
@@ -161,6 +166,12 @@ export default function ManagerDashboardPage() {
       await api.post('/ratings', {
         employee_id: employeeId,
         rating: newValue,
+      });
+      await fetchDashboard();
+      setRatingOverrides((prev) => {
+        const next = { ...prev };
+        delete next[employeeId];
+        return next;
       });
       setSuccess(`Rating saved for ${employeeName}`);
     } catch {
@@ -612,8 +623,8 @@ export default function ManagerDashboardPage() {
           </TableHead>
           <TableBody>
             {employeeOptions.map((e) => {
-              const employeeReviews = reviews.filter((r) => r.employee_id === e.employeeId);
-              const lastRating = employeeReviews.length ? employeeReviews[employeeReviews.length - 1].rating : '-';
+              const liveRating = ratingOverrides[e.employeeId] ?? teamAverageByName[e.name];
+              const lastRating = liveRating !== undefined ? Number(liveRating).toFixed(1) : '-';
               const pendingPlans = plans.filter((p) => p.employee_id === e.employeeId && p.status !== 'Completed').length;
               return (
                 <TableRow key={e.employeeId}>
@@ -629,8 +640,8 @@ export default function ManagerDashboardPage() {
 
           <Box sx={{ display: { xs: 'grid', sm: 'none' }, gap: 1.25, px: 2.5, pb: 2.5 }}>
             {employeeOptions.map((e) => {
-              const employeeReviews = reviews.filter((r) => r.employee_id === e.employeeId);
-              const lastRating = employeeReviews.length ? employeeReviews[employeeReviews.length - 1].rating : '-';
+              const liveRating = ratingOverrides[e.employeeId] ?? teamAverageByName[e.name];
+              const lastRating = liveRating !== undefined ? Number(liveRating).toFixed(1) : '-';
               const pendingPlans = plans.filter((p) => p.employee_id === e.employeeId && p.status !== 'Completed').length;
               return (
                 <Box key={`snapshot-mobile-${e.employeeId}`} sx={{ p: 1.25, border: '1px solid', borderColor: 'divider', borderRadius: 1.5 }}>
